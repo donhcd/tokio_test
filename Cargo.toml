@@ -11,13 +11,13 @@ tokio-core = "0.1.0"
 tokio-curl = "0.1.0"
 
 [[bin]]
-name = "listener"
+name = "curl"
 path = "src/main.rs"  
 
 [[bin]]
-name = "curl"
-path = "src/foo/main.rs"  
+name = "listener"
+path = "src/foo/main2.rs"  
 
 [[bin]]
-name = "curl_old"
-path = "src/foo/main_old.rs"  
+name = "curl2"
+path = "src/foo/main.rs"  

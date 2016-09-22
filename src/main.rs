@@ -1,51 +1,76 @@
+extern crate curl;
 extern crate futures;
 extern crate tokio_core;
+extern crate tokio_curl;
 
-use std::env;
-use std::net::SocketAddr;
+use std::sync::mpsc;
+use std::thread;
 
-use futures::Future;
+use curl::easy::Easy;
+use futures::{Future, empty, finished};
 use futures::stream::Stream;
-use tokio_core::io::{copy, Io};
-use tokio_core::net::TcpListener;
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{Core, Remote};
+use tokio_core::channel;
+use tokio_curl::Session;
+
+fn get_remote() -> Remote {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        // Create an event loop that we'll run on, as well as an HTTP `Session`
+        // which we'll be routing all requests through.
+        let mut core = Core::new().unwrap();
+        sender.send(core.remote()).unwrap();
+
+        core.run(empty::<(), ()>()).unwrap();
+    });
+    receiver.recv().unwrap()
+}
+
+fn foo(remote: Remote) {
+    let (outside_sender, outside_receiver) = mpsc::channel();
+    remote.spawn(move |h| {
+        let (sender, receiver) = channel::channel::<Vec<u8>>(h).unwrap();
+
+        // Prepare the HTTP request to be sent.
+        let session = Session::new(h.clone());
+        let mut req = Easy::new();
+        req.get(true).unwrap();
+        req.url("https://www.rust-lang.org").unwrap();
+        req.write_function(move |new_data| {
+                let mut resp_data = Vec::with_capacity(new_data.len());
+                resp_data.extend_from_slice(new_data);
+                sender.send(resp_data).unwrap();
+                Ok(new_data.len())
+            })
+            .unwrap();
+
+        // Once we've got our session, issue an HTTP request to download the
+        // rust-lang home page
+        let request = session.perform(req);
+
+        // Execute the request, and print the response code as well as the error
+        // that happened (if any).
+        h.spawn(request.then(move |req_res| {
+            match req_res {
+                Ok(mut easy) => println!("resp code: {:?}", easy.response_code()),
+                Err(err) => println!("booo: {}", err),
+            }
+            receiver.collect().then(move |resp_bodies| {
+                println!("ok it's done: ok? {}", resp_bodies.is_ok());
+                outside_sender.send(format!("got page: {}", unsafe {
+                        String::from_utf8_unchecked(resp_bodies.unwrap().swap_remove(0))
+                    }))
+                    .unwrap();
+                Ok(())
+            })
+        }));
+        finished(())
+    });
+    println!("outside: {}", outside_receiver.recv().unwrap())
+}
 
 fn main() {
-    let addr = env::args().nth(1).unwrap_or("127.0.0.1:8080".to_string());
-    let addr = addr.parse::<SocketAddr>().unwrap();
-
-    // Create the event loop that will drive this server
-    let mut l = Core::new().unwrap();
-    let handle = l.handle();
-
-    // Create a TCP listener which will listen for incoming connections
-    let socket = TcpListener::bind(&addr, &handle).unwrap();
-
-    // Once we've got the TCP listener, inform that we have it
-    println!("Listening on: {}", addr);
-
-    // Pull out the stream of incoming connections and then for each new
-    // one spin up a new task copying data.
-    //
-    // We use the `io::copy` future to copy all data from the
-    // reading half onto the writing half.
-    let done = socket.incoming().and_then(|(socket, addr)| {
-        // let pair = futures::lazy(|| Ok(socket.split()));
-        // let amt = pair.and_then(|(reader, writer)| copy(reader, writer));
-
-        // // Once all that is done we print out how much we wrote, and then
-        // // critically we *spawn* this future which allows it to run
-        // // concurrently with other connections.
-        // handle.spawn(amt.then(move |result| {
-        //     println!("wrote {:?} bytes to {}", result, addr);
-        //     Ok(())
-        // }));
-
-        // ()
-        unimplemented!()
-    });
-
-    // Execute our server (modeled as a future) and wait for it to
-    // complete.
-    l.run(done).unwrap();
+    let core_handle = get_remote();
+    foo(core_handle);
+    // thread::sleep(time::Duration::from_secs(10));
 }
