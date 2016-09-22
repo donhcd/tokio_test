@@ -16,8 +16,7 @@ use tokio_curl::Session;
 fn get_remote() -> Remote {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        // Create an event loop that we'll run on, as well as an HTTP `Session`
-        // which we'll be routing all requests through.
+        // Create an event loop that we'll run on
         let mut core = Core::new().unwrap();
         sender.send(core.remote()).unwrap();
 
