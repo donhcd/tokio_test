@@ -55,9 +55,12 @@ fn foo(remote: Remote) {
                 Err(err) => println!("booo: {}", err),
             }
             receiver.collect().then(move |resp_bodies| {
-                println!("ok it's done: ok? {}", resp_bodies.is_ok());
+                println!("collect is done: ok? {}", resp_bodies.is_ok());
                 outside_sender.send(format!("got page: {}", unsafe {
-                        String::from_utf8_unchecked(resp_bodies.unwrap().swap_remove(0))
+                        String::from_utf8_unchecked(resp_bodies.unwrap()
+                            .iter()
+                            .flat_map(Clone::clone)
+                            .collect())
                     }))
                     .unwrap();
                 Ok(())
@@ -71,5 +74,4 @@ fn foo(remote: Remote) {
 fn main() {
     let core_handle = get_remote();
     foo(core_handle);
-    // thread::sleep(time::Duration::from_secs(10));
 }
