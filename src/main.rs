@@ -3,14 +3,12 @@ extern crate futures;
 extern crate tokio_core;
 extern crate tokio_curl;
 
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use curl::easy::Easy;
 use futures::{Future, empty, finished};
-use futures::stream::Stream;
 use tokio_core::reactor::{Core, Remote};
-use tokio_core::channel;
 use tokio_curl::Session;
 
 fn get_remote() -> Remote {
@@ -28,17 +26,15 @@ fn get_remote() -> Remote {
 fn foo(remote: Remote) {
     let (outside_sender, outside_receiver) = mpsc::channel();
     remote.spawn(move |h| {
-        let (sender, receiver) = channel::channel::<Vec<u8>>(h).unwrap();
-
         // Prepare the HTTP request to be sent.
         let session = Session::new(h.clone());
         let mut req = Easy::new();
+        let response = Arc::new(Mutex::new(Vec::new()));
         req.get(true).unwrap();
         req.url("https://www.rust-lang.org").unwrap();
+        let response2 = response.clone();
         req.write_function(move |new_data| {
-                let mut resp_data = Vec::with_capacity(new_data.len());
-                resp_data.extend_from_slice(new_data);
-                sender.send(resp_data).unwrap();
+                response2.lock().unwrap().extend_from_slice(new_data);
                 Ok(new_data.len())
             })
             .unwrap();
@@ -54,17 +50,12 @@ fn foo(remote: Remote) {
                 Ok(mut easy) => println!("resp code: {:?}", easy.response_code()),
                 Err(err) => println!("booo: {}", err),
             }
-            receiver.collect().then(move |resp_bodies| {
-                println!("collect is done: ok? {}", resp_bodies.is_ok());
-                outside_sender.send(format!("got page: {}", unsafe {
-                        String::from_utf8_unchecked(resp_bodies.unwrap()
-                            .iter()
-                            .flat_map(Clone::clone)
-                            .collect())
-                    }))
-                    .unwrap();
-                Ok(())
-            })
+            outside_sender.send(format!("got page: {}", unsafe {
+                    String::from_utf8_unchecked(::std::mem::replace(&mut *response.lock().unwrap(),
+                                                                    vec![]))
+                }))
+                .unwrap();
+            Ok(())
         }));
         finished(())
     });
